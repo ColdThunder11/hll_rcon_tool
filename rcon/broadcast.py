@@ -128,7 +128,7 @@ def format_map_vote(rcon, format_type="line", short_names=True):
         if format_type == 'by_mod_split':
             return "OFFENSIVE: {}\nWARFARE: {}".format(off, warfare)
         if format_type == 'by_mod_vertical_all':
-            return "OFFENSIVE:\n{}\nWARFARE:\n{}".format(
+            return "OFFENSIVE:\n\n{}\nWARFARE:\n\n{}".format(
                 join_vote_options('\n', categorized['offensive'], human_map_mod, maps_to_numbers),
                 join_vote_options('\n', categorized['warfare'], human_map_mod, maps_to_numbers)
             )
