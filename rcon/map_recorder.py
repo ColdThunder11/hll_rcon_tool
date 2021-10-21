@@ -50,6 +50,7 @@ def suggest_next_maps(
     allow_consecutive_offensive=True,
     allow_consecutive_offensives_of_opposite_side=False,
     current_map=None,
+    follow_map_rotation=True
 ):
     if exclude_last_n > 0:
         last_n_map = set(m["name"] for m in maps_history[:exclude_last_n])
@@ -57,6 +58,14 @@ def suggest_next_maps(
         last_n_map = set()
     logger.info("Excluding last %s player maps: %s", exclude_last_n, last_n_map)
     remaining_maps = set(all_maps) - last_n_map
+    
+    if follow_map_rotation:
+        rcon = RecordedRcon(SERVER_INFO)
+        current_rotation = set(rcon.get_map_rotation())
+        for last_map in last_n_map:
+            current_rotation.discard(last_map)
+        remaining_maps = current_map
+
     logger.info("Remaining maps to suggest from: %s", remaining_maps)
 
     try:
