@@ -122,13 +122,13 @@ def format_map_vote(rcon, format_type="line", short_names=True):
         off = join_vote_options('  ', categorized['offensive'], human_map_mod, maps_to_numbers)
         warfare = join_vote_options('  ', categorized['warfare'], human_map_mod, maps_to_numbers)
         if format_type == 'by_mod_line':
-            return "OFFENSIVE: {} WARFARE: {}".format(off, warfare)
+            return "攻防模式: {} 冲突模式: {}".format(off, warfare)
         if format_type == 'by_mod_vertical':
-            return "OFFENSIVE:\n{}\nWARFARE:\n{}".format(off, warfare)
+            return "攻防模式:\n{}\n冲突模式:\n{}".format(off, warfare)
         if format_type == 'by_mod_split':
-            return "OFFENSIVE: {}\nWARFARE: {}".format(off, warfare)
+            return "攻防模式: {}\n冲突模式: {}".format(off, warfare)
         if format_type == 'by_mod_vertical_all':
-            return "OFFENSIVE:\n\n{}\nWARFARE:\n\n{}".format(
+            return "攻防模式:\n\n{}\n冲突模式:\n\n{}".format(
                 join_vote_options('\n', categorized['offensive'], human_map_mod, maps_to_numbers),
                 join_vote_options('\n', categorized['warfare'], human_map_mod, maps_to_numbers)
             )
