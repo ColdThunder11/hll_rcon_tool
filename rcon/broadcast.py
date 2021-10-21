@@ -128,7 +128,7 @@ def format_map_vote(rcon, format_type="line", short_names=True):
         if format_type == 'by_mod_split':
             return "攻防模式: {}\n冲突模式: {}".format(off, warfare)
         if format_type == 'by_mod_vertical_all':
-            return "攻防模式:\n\n{}\n\n冲突模式:\n{}".format(
+            return "攻防模式:\n\n{}\n\n冲突模式:\n\n{}".format(
                 join_vote_options('\n', categorized['offensive'], human_map_mod, maps_to_numbers),
                 join_vote_options('\n', categorized['warfare'], human_map_mod, maps_to_numbers)
             )
