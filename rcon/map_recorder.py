@@ -64,7 +64,7 @@ def suggest_next_maps(
         current_rotation = set(rcon.get_map_rotation())
         for last_map in last_n_map:
             current_rotation.discard(last_map)
-        remaining_maps = current_map
+        remaining_maps = current_rotation
 
     logger.info("Remaining maps to suggest from: %s", remaining_maps)
 
