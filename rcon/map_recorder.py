@@ -252,6 +252,10 @@ class VoteMap:
         config = VoteMapConfig()
         all_maps = ALL_MAPS
 
+        rcon = RecordedRcon(SERVER_INFO)
+        current_rotation = set(rcon.get_map_rotation())
+        all_maps = current_rotation
+
         if not config.get_votemap_allow_default_to_offsensive():
             logger.debug(
                 "Not allowing default to offensive, removing all offensive maps"
