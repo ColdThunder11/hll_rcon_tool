@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 import "./App.css";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
@@ -25,6 +25,7 @@ import {
   LiveSessionScore,
 } from "./components/Scoreboard/LiveScore";
 import ServerInfo from "./components/Embeds/ServerInfo";
+import GameView from "./components/GameView"
 
 const Live = ({ classes }) => {
   const [mdSize, setMdSize] = React.useState(6);
@@ -323,7 +324,6 @@ const hllNoBg = createMuiTheme({
 
 function App() {
   const [isEmbed, setIsEmbed] = React.useState(false);
-  const classes = useStyles();
   const [userTheme, setThemeName] = React.useState(
     localStorage.getItem("theme")
   );
@@ -359,6 +359,7 @@ function App() {
     : themes[userTheme]
     ? themes[userTheme]
     : lightTheme;
+  const classes = useStyles();
 
   const Router = isEmbed ? BrowserRouter : HashRouter;
 
@@ -377,6 +378,9 @@ function App() {
           )}
 
           <Switch>
+          <Route path="/gameview" exact>
+              <GameView classes={classes} />
+            </Route>
             <Route path="/serverinfo" exact>
               <ServerInfo classes={classes} />
             </Route>

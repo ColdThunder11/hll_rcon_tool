@@ -1,9 +1,13 @@
+from cmath import inf
+import profile
 import random
 import os
 import re
 from datetime import datetime, timedelta
 import logging
 import socket
+from time import sleep
+from rcon.player_history import get_profiles
 from rcon.cache_utils import ttl_cache, invalidates, get_redis_client
 from rcon.commands import HLLServerError, ServerCtl, CommandFailedError
 from rcon.steam_utils import get_player_country_code, get_player_has_bans
@@ -11,8 +15,29 @@ from rcon.steam_utils import get_player_country_code, get_player_has_bans
 STEAMID = "steam_id_64"
 NAME = "name"
 ROLE = "role"
-
-
+# ["CHAT[Allies]", "CHAT[Axis]", "CHAT", "VOTE STARTED", "VOTE COMPLETED"]
+LOG_ACTIONS = [
+    "DISCONNECTED",
+    "CHAT[Allies]",
+    "CHAT[Axis]",
+    "CHAT[Allies][Unit]",
+    "KILL",
+    "CONNECTED",
+    "CHAT[Allies][Team]",
+    "CHAT[Axis][Team]",
+    "CHAT[Axis][Unit]",
+    "CHAT",
+    "VOTE COMPLETED",
+    "VOTE STARTED",
+    "VOTE",
+    "TEAMSWITCH",
+    "TK",
+    "TK KICKED",
+    "TK BANNED FOR 2 HOURS",
+    "MATCH",
+    "MATCH START",
+    "MATCH ENDED",
+]
 logger = logging.getLogger(__name__)
 
 
@@ -66,13 +91,118 @@ class Rcon(ServerCtl):
 
         return vip_count
 
+    def _guess_squad_type(self, squad):
+        for player in squad.get("players", []):
+            if player.get("role") in ["tankcommander", "crewman"]:
+                return "armor"
+            if player.get("role") in ["spotter", "sniper"]:
+                return "recon"
+            if player.get("role") in ["armycommander"]:
+                return "commander"
+        
+        return "infantry"
+
+    def _has_leader(self, squad):
+        for players in squad.get("players", []):
+            if players.get("role") in ["tankcommander", "officer", "spotter"]:
+                return True
+        return False
+
+    @ttl_cache(ttl=60, cache_falsy=False)
+    def get_team_view(self):
+        #with open("get_team_view.json") as f:
+        #    import json
+        #    return json.load(f)["result"]
+        teams = {}
+        players_by_id = {}
+        for player in super().get_players():
+            try:
+                info = self.get_detailed_player_info(player)
+                print(info)
+            except (HLLServerError, CommandFailedError):
+                logger.exception("Unable to get %s info", player)
+                try:
+                    steam_id_64 = self.get_playerids(as_dict=True).get(player)
+                    info = self._get_default_info_dict(player)
+                    info[STEAMID] = steam_id_64
+                except Exception:
+                    logger.exception("Unable to get %s info with playerids either", player)
+                    continue
+
+            players_by_id[info.get(STEAMID)] = info
+            
+        logger.debug("Getting DB profiles")
+        steam_profiles = {profile[STEAMID]: profile for profile in get_profiles(list(players_by_id.keys()))}
+        logger.debug("Getting VIP list")
+        try:
+            vips = set(v[STEAMID] for v in self.get_vip_ids())
+        except Exception:
+            logger.exception("Failed to get VIPs")
+            vips = set()
+
+        for player in players_by_id.values():
+            steam_id_64 = player[STEAMID]
+            profile = steam_profiles.get(player.get("steam_id_64"), {})
+            player["profile"] = profile
+            player["is_vip"] = steam_id_64 in vips
+            player["country"] = profile.get("steaminfo", {}).get("country", "private")
+            # TODO refresh ban info and store into DB to avoid IOs here
+            player["steam_bans"] = get_player_has_bans(steam_id_64)
+            teams.setdefault(player.get("team"), {}).setdefault(player.get("unit_name"), {}).setdefault("players", []).append(player)    
+
+        for team, squads in teams.items():
+            if team is None:
+                continue
+            for squad_name, squad in squads.items():
+                squad["type"] = self._guess_squad_type(squad)  
+                squad["has_leader"] = self._has_leader(squad)  
+               
+                try:
+                    squad["combat"] = sum(p["combat"] for p in squad['players'])
+                    squad["offense"] = sum(p["offense"] for p in squad['players'])
+                    squad["defense"] = sum(p["defense"] for p in squad['players'])
+                    squad["support"] = sum(p["support"] for p in squad['players'])
+                    squad["kills"] = sum(p["kills"] for p in squad['players'])
+                    squad["deaths"] = sum(p["deaths"] for p in squad['players'])
+                except Exception as e:
+                    logger.exception()
+
+        game = {}
+        for team, squads in teams.items():
+            if team is None:
+                continue
+            commander = [squad for _, squad in squads.items() if squad["type"] == "commander"]
+            if not commander:
+                commander = None
+            else:
+                commander = commander[0]["players"][0] if commander[0].get("players") else None
+
+            game[team] = {
+                "squads": {
+                    squad_name: squad 
+                    for squad_name, squad in squads.items() 
+                    if squad["type"] != "commander"
+                },
+                "commander": commander,
+                "combat": sum(s["combat"] for s in squads.values()),
+                "offense": sum(s["offense"] for s in squads.values()),
+                "defense": sum(s["defense"] for s in squads.values()),
+                "support": sum(s["support"] for s in squads.values()),
+                "kills": sum(s["kills"] for s in squads.values()),
+                "deaths": sum(s["deaths"] for s in squads.values()),
+                "count": sum(len(s["players"]) for s in squads.values())
+            }
+
+        return game
+
     @ttl_cache(ttl=60 * 60 * 24, cache_falsy=False)
     def get_player_info(self, player):
         try:
             try:
                 raw = super().get_player_info(player)
-                name, steam_id_64 = raw.split("\n")
-            except CommandFailedError:
+                name, steam_id_64, *rest = raw.split("\n")
+            except (CommandFailedError, Exception):
+                sleep(2)
                 name = player
                 steam_id_64 = self.get_playerids(as_dict=True).get(name)
             if not steam_id_64:
@@ -102,6 +232,84 @@ class Rcon(ServerCtl):
             "country": country,
             "steam_bans": steam_bans,
         }
+    
+    def _get_default_info_dict(self, player):
+        return dict(
+            name=player,
+            steam_id_64=None,
+            unit_id=None,
+            unit_name=None,
+            loadout=None,
+            team=None,
+            role=None,
+            kills=0,
+            deaths=0,
+            combat=0,
+            offense=0,
+            defense=0,
+            support=0,
+            level=0,
+        )
+
+    @ttl_cache(ttl=10, cache_falsy=False)
+    def get_detailed_player_info(self, player):
+        raw = super().get_player_info(player)
+        if not raw:
+            raise CommandFailedError("Got bad data")
+
+        """
+        Name: T17 Scott
+        steamID64: 01234567890123456
+        Team: Allies            # "None" when not in team
+        Role: Officer           
+        Unit: 0 - Able          # Absent when not in unit
+        Loadout: NCO            # Absent when not in team
+        Kills: 0 - Deaths: 0
+        Score: C 50, O 0, D 40, S 10
+        Level: 34
+
+        """
+
+        data = self._get_default_info_dict(player)
+        raw_data = {}
+
+        for line in raw.split("\n"):
+            if not line:
+                continue
+            if ": " not in line:
+                logger.warning("Invalid info line: %s", line)
+                continue
+            logger.debug(line)
+            key, val = line.split(": ", 1)
+            raw_data[key.lower()] = val
+
+        logger.debug(raw_data)
+        # Remap keys and parse values
+        data[STEAMID] = raw_data.get("steamid64")
+        data["team"] = raw_data.get("team", "None")
+        data["unit_id"], data['unit_name'] = raw_data.get("unit").split(' - ') if raw_data.get("unit") else ("None", None)
+        data["kills"], data["deaths"] = raw_data.get("kills").split(' - Deaths: ') if raw_data.get("kills") else ('0', '0')
+        for k in ["role", "loadout", "level"]:
+            data[k] = raw_data.get(k)
+
+        scores = dict([score.split(" ", 1) for score in raw_data.get("score", "C 0, O 0, D 0, S 0").split(", ")])
+        map_score = {"C": "combat", "O": "offense", "D": "defense", "S": "support"}
+        for key, val in map_score.items():
+            data[map_score[key]] = scores.get(key, '0')
+
+        # Typecast values
+        # cast strings to lower
+        for key in ["team", "unit_name", "role", "loadout"]:
+            data[key] = data[key].lower() if data.get(key) else None
+   
+        # cast string numbers to ints
+        for key in ["kills", "deaths", "level", "combat", "offense", "defense", "support", "unit_id"]:
+            try:
+                data[key] = int(data[key])
+            except (ValueError, TypeError):
+                data[key] = 0
+        
+        return data
 
     @ttl_cache(ttl=60 * 60 * 24)
     def get_admin_ids(self):
@@ -717,13 +925,7 @@ class Rcon(ServerCtl):
 
     @staticmethod
     def parse_logs(raw, filter_action=None, filter_player=None):
-        synthetic_actions = [
-            "CHAT[Allies]",
-            "CHAT[Axis]",
-            "CHAT",
-            "VOTE STARTED",
-            "VOTE COMPLETED",
-        ]
+        synthetic_actions = LOG_ACTIONS
         now = datetime.now()
         res = []
         actions = set()
@@ -783,12 +985,35 @@ class Rcon(ServerCtl):
                 elif rest.upper().startswith("PLAYER"):
                     action = "CAMERA"
                     _, content = rest.split(" ", 1)
-                    matches = re.match("\[(.*)\s{1}\((\d+)\)\]", content)
+                    matches = re.match(r"\[(.*)\s{1}\((\d+)\)\]", content)
                     if matches and len(matches.groups()) == 2:
                         player, steam_id_64_1 = matches.groups()
                         _, sub_content = content.rsplit("]", 1)
                     else:
                         logger.error("Unable to parse line: %s", line)
+                elif rest.upper().startswith("TEAMSWITCH"):
+                    action = "TEAMSWITCH"
+                    matches = re.match(r"TEAMSWITCH\s(.*)\s\(((.*)\s>\s(.*))\)", rest)
+                    if matches and len(matches.groups()) == 4:
+                        player, sub_content, *_ = matches.groups()
+                    else:
+                        logger.error("Unable to parse line: %s", line)
+                elif rest.upper().startswith("KICK") and "FOR TEAM KILLING" in rest:
+                    matches = re.match(
+                        r"KICK:\s\[(.*)\]\s(has been kicked. \[((KICKED)|(BANNED FOR 2 HOURS)) FOR TEAM KILLING!\])",
+                        rest,
+                    )
+                    if matches and len(matches.groups()) == 5:
+                        player, sub_content, type_, *_ = matches.groups()
+                        action = f"TK {type_}"
+                    else:
+                        logger.error("Unable to parse line: %s", line)
+                elif rest.upper().startswith("MATCH START"):
+                    action = "MATCH START"
+                    _, sub_content = rest.split("MATCH START ")
+                elif rest.upper().startswith("MATCH ENDED"):
+                    action = "MATCH ENDED"
+                    _, sub_content = rest.split("MATCH ENDED ")
                 else:
                     logger.error("Unkown type line: '%s'", line)
                     continue
